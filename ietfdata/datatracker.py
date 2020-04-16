@@ -56,6 +56,7 @@ import glob
 import json
 import requests
 import re
+import urllib.parse
 
 # =================================================================================================================================
 # Classes to represent the JSON-serialised objects returned by the Datatracker API:
@@ -886,7 +887,39 @@ class DataTracker:
         obj = self.pavlova.from_mapping(obj_json, obj_type) # type: T
         return obj
 
+
+    def _get_multi_time(self, resource_uri) -> datetime:
+        if self.cache_dir is not None:
+            cache_filepath = Path(self.cache_dir, resource_uri.uri[1:-1], "_multi", "query?" + urllib.parse.urlencode(resource_uri.params))
+            cache_filepath.parent.mkdir(parents=True, exist_ok=True)
+            if cache_filepath.exists():
+                obj_json = {}
+                with open(cache_filepath) as cache_file:
+                    obj_json = json.load(cache_file)
+                    return datetime.fromisoformat(obj_json["time"])
+        return datetime.fromisoformat("1970-01-01T00:00:00")
+
+
+    def _set_multi_time(self, resource_uri: URI, time: datetime) -> None:
+        cache_entry = {
+            "uri"    : resource_uri.uri,
+            "params" : resource_uri.params,
+            "time"   : time.isoformat()
+        }
+        if self.cache_dir is not None:
+            cache_filepath = Path(self.cache_dir, resource_uri.uri[1:-1], "_multi", "query?" + urllib.parse.urlencode(resource_uri.params))
+            cache_filepath.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_filepath, "w") as cache_file:
+                json.dump(cache_entry, cache_file)
+
+
     def _retrieve_multi(self, resource_uri: URI, obj_type: Type[T]) -> Iterator[T]:
+        prev_time = self._get_multi_time(resource_uri)
+        curr_time = datetime.now()
+        self._set_multi_time(resource_uri, curr_time)
+
+        # resource_uri.params["time__gte"] = prev_time.isoformat()
+        # resource_uri.params["time__lt"]  = curr_time.isoformat()
         resource_uri.params["limit"] = "100"
         while resource_uri.uri is not None:
             headers = {'user-agent': self.ua}
