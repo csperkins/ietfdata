@@ -976,25 +976,18 @@ class DataTracker:
         return self._retrieve_multi(url, PersonEvent)
 
 
-    def people(self,
-            since : str ="1970-01-01T00:00:00",
-            until : str ="2038-01-19T03:14:07",
-            name_contains : Optional[str] = None) -> Iterator[Person]:
+    def people(self, name_contains : Optional[str] = None) -> Iterator[Person]:
         """
         A generator that returns people recorded in the datatracker. As of April
         2018, there are approximately 21500 people recorded.
 
         Parameters:
-            since         -- Only return people with timestamp after this
-            until         -- Only return people with timestamp before this
             name_contains -- Only return peopls whose name containing this string
 
         Returns:
             An iterator, where each element is as returned by the person() method
         """
         url = PersonURI("/api/v1/person/person/")
-        url.params["time__gte"] = since
-        url.params["time__lt"]  = until
         url.params["name__contains"] = name_contains
         return self._retrieve_multi(url, Person)
 
@@ -1026,24 +1019,17 @@ class DataTracker:
         return self._retrieve_multi(uri, HistoricalEmail)
 
 
-    def emails(self,
-               since : str ="1970-01-01T00:00:00",
-               until : str ="2038-01-19T03:14:07",
-               addr_contains : Optional[str] = None) -> Iterator[Email]:
+    def emails(self, addr_contains : Optional[str] = None) -> Iterator[Email]:
         """
         A generator that returns email addresses recorded in the datatracker.
 
         Parameters:
-            since         -- Only return email addresses with timestamp after this
-            until         -- Only return email addresses with timestamp before this
             addr_contains -- Only return email addresses containing this substring
 
         Returns:
             An iterator, where each element is an Email object
         """
         url = EmailURI("/api/v1/person/email/")
-        url.params["time__gte"] = since
-        url.params["time__lt"]   = until
         url.params["address__contains"] = addr_contains
         return self._retrieve_multi(url, Email)
 
@@ -1058,13 +1044,9 @@ class DataTracker:
 
 
     def documents(self,
-            since   : str = "1970-01-01T00:00:00",
-            until   : str = "2038-01-19T03:14:07",
             doctype : Optional[DocumentType] = None,
             group   : Optional[Group]        = None) -> Iterator[Document]:
         url = DocumentURI("/api/v1/doc/document/")
-        url.params["time__gt"] = since
-        url.params["time__lt"] = until
         if doctype is not None:
             url.params["type"] = doctype.slug
         if group is not None:
@@ -1230,8 +1212,6 @@ class DataTracker:
 
 
     def document_events(self,
-                        since      : str = "1970-01-01T00:00:00",
-                        until      : str = "2038-01-19T03:14:07",
                         doc        : Document = None,
                         by         : Person   = None,
                         event_type : str      = None) -> Iterator[DocumentEvent]:
@@ -1239,8 +1219,6 @@ class DataTracker:
         A generator returning information about document events.
 
         Parameters:
-            since      -- Only return document events with timestamp after this
-            until      -- Only return document events with timestamp after this
             doc        -- Only return document events for this document
             by         -- Only return document events by this person
             event_type -- Only return document events with this type
@@ -1249,8 +1227,6 @@ class DataTracker:
            A sequence of DocumentEvent objects
         """
         url = DocumentEventURI("/api/v1/doc/docevent/")
-        url.params["time__gt"] = since
-        url.params["time__lt"] = until
         if doc is not None:
             url.params["doc"]  = doc.id
         if by is not None:
@@ -1387,8 +1363,6 @@ class DataTracker:
 
 
     def ballot_document_events(self,
-                        since       : str = "1970-01-01T00:00:00",
-                        until       : str = "2038-01-19T03:14:07",
                         ballot_type : Optional[BallotType]    = None,
                         event_type  : Optional[str]           = None,
                         by          : Optional[Person]        = None,
@@ -1397,8 +1371,6 @@ class DataTracker:
         A generator returning information about ballot document events.
 
         Parameters:
-            since        -- Only return ballot document events with timestamp after this
-            until        -- Only return ballot document events with timestamp after this
             ballot_type  -- Only return ballot document events of this ballot type
             event_type   -- Only return ballot document events with this type
             by           -- Only return ballot document events by this person
@@ -1408,8 +1380,6 @@ class DataTracker:
            A sequence of BallotDocumentEvent objects
         """
         url = BallotDocumentEventURI("/api/v1/doc/ballotdocevent/")
-        url.params["time__gt"] = since
-        url.params["time__lt"] = until
         if ballot_type is not None:
             url.params["ballot_type"] = ballot_type.id
         if by is not None:
@@ -1431,12 +1401,8 @@ class DataTracker:
         return self._retrieve(submission_uri, Submission)
 
 
-    def submissions(self,
-            since           : str = "1970-01-01T00:00:00",
-            until           : str = "2038-01-19T03:14:07") -> Iterator[Submission]:
+    def submissions(self) -> Iterator[Submission]:
         url = SubmissionURI("/api/v1/submit/submission/")
-        url.params["time__gt"] = since
-        url.params["time__lt"] = until
         return self._retrieve_multi(url, Submission)
 
 
@@ -1445,16 +1411,12 @@ class DataTracker:
 
 
     def submission_events(self,
-                        since      : str = "1970-01-01T00:00:00",
-                        until      : str = "2038-01-19T03:14:07",
                         by         : Optional[Person]     = None,
                         submission : Optional[Submission] = None) -> Iterator[SubmissionEvent]:
         """
         A generator returning information about submission events.
 
         Parameters:
-            since      -- Only return submission events with timestamp after this
-            until      -- Only return submission events with timestamp after this
             by         -- Only return submission events by this person
             submission -- Only return submission events about this submission
 
@@ -1462,8 +1424,6 @@ class DataTracker:
            A sequence of SubmissionEvent objects
         """
         url = SubmissionEventURI("/api/v1/submit/submissionevent/")
-        url.params["time__gt"] = since
-        url.params["time__lt"] = until
         if by is not None:
             url.params["by"] = by.id
         if submission is not None:
@@ -1529,14 +1489,10 @@ class DataTracker:
 
 
     def groups(self,
-            since         : str                  = "1970-01-01T00:00:00",
-            until         : str                  = "2038-01-19T03:14:07",
             name_contains : Optional[str]        = None,
             state         : Optional[GroupState] = None,
             parent        : Optional[Group]      = None) -> Iterator[Group]:
         url = GroupURI("/api/v1/group/group/")
-        url.params["time__gt"]       = since
-        url.params["time__lt"]       = until
         url.params["name__contains"] = name_contains
         if state is not None:
             url.params["state"] = state.slug
