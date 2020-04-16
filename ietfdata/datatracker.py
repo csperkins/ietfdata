@@ -1670,6 +1670,41 @@ class DataTracker:
 
 
     # ----------------------------------------------------------------------------------------------------------------------------
+    # Utility methods to allow change tracking:
+
+    def updated_people(self) -> Iterator[Person]:
+        pass
+
+
+    def updated_emails(self) -> Iterator[Email]:
+        pass
+
+
+    def updated_documents(self) -> Iterator[Document]:
+        pass
+
+
+    def updated_document_events(self) -> Iterator[DocumentEvent]:
+        pass
+
+
+    def updates_ballot_document_events(self) -> Iterator[BallotDocumentEvent]:
+        pass
+
+
+    def updated_submissions(self) -> Iterator[Submission]:
+        pass
+
+
+    def updated_submission_events(self) -> Iterator[SubmissionEvent]:
+        pass
+
+
+    def updated_groups(self) -> Iterator[Group]:
+        pass
+
+
+    # ----------------------------------------------------------------------------------------------------------------------------
     # Datatracker API endpoints returning information about IPR disclosures:
     #
     #   https://datatracker.ietf.org/api/v1/ipr/iprdocrel/
