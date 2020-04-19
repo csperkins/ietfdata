@@ -44,6 +44,7 @@
 #   RFC 6359 "Datatracker Extensions to Include IANA and RFC Editor Processing Information"
 #   RFC 7760 "Statement of Work for Extensions to the IETF Datatracker for Author Statistics"
 
+from copy        import deepcopy
 from datetime    import datetime, timedelta
 from enum        import Enum
 from typing      import List, Optional, Tuple, Dict, Iterator, Type, TypeVar, Any
@@ -52,7 +53,6 @@ from pathlib     import Path
 from pavlova     import Pavlova
 from pavlova.parsers import GenericParser
 
-import glob
 import json
 import requests
 import re
@@ -889,37 +889,37 @@ class DataTracker:
 
 
     def _get_multi_time(self, resource_uri) -> datetime:
-        if self.cache_dir is not None:
-            cache_filepath = Path(self.cache_dir, resource_uri.uri[1:-1], "_multi", "query?" + urllib.parse.urlencode(resource_uri.params))
-            cache_filepath.parent.mkdir(parents=True, exist_ok=True)
-            if cache_filepath.exists():
-                obj_json = {}
-                with open(cache_filepath) as cache_file:
-                    obj_json = json.load(cache_file)
-                    return datetime.fromisoformat(obj_json["time"])
-        return datetime.fromisoformat("1970-01-01T00:00:00")
+        assert self.cache_dir is not None
+        cache_filepath = Path(self.cache_dir, resource_uri.uri[1:-1], "_multi", "query?" + urllib.parse.urlencode(resource_uri.params))
+        cache_filepath.parent.mkdir(parents=True, exist_ok=True)
+        if cache_filepath.exists():
+            obj_json = {}
+            with open(cache_filepath) as cache_file:
+                obj_json = json.load(cache_file)
+                return datetime.fromisoformat(obj_json["time"])
+        else:
+            return datetime.fromisoformat("1970-01-01T00:00:00")
 
 
     def _set_multi_time(self, resource_uri: URI, time: datetime) -> None:
+        assert self.cache_dir is not None
         cache_entry = {
             "uri"    : resource_uri.uri,
             "params" : resource_uri.params,
             "time"   : time.isoformat()
         }
-        if self.cache_dir is not None:
-            cache_filepath = Path(self.cache_dir, resource_uri.uri[1:-1], "_multi", "query?" + urllib.parse.urlencode(resource_uri.params))
-            cache_filepath.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_filepath, "w") as cache_file:
-                json.dump(cache_entry, cache_file)
+        cache_filepath = Path(self.cache_dir, resource_uri.uri[1:-1], "_multi", "query?" + urllib.parse.urlencode(resource_uri.params))
+        cache_filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_filepath, "w") as cache_file:
+            json.dump(cache_entry, cache_file)
 
 
-    def _retrieve_multi(self, resource_uri: URI, obj_type: Type[T]) -> Iterator[T]:
-        prev_time = self._get_multi_time(resource_uri)
-        curr_time = datetime.now()
-        self._set_multi_time(resource_uri, curr_time)
-
-        # resource_uri.params["time__gte"] = prev_time.isoformat()
-        # resource_uri.params["time__lt"]  = curr_time.isoformat()
+    def _cache_objs(self, resource_uri: URI, obj_type: Type[T], prev_time: datetime, curr_time: datetime) -> None:
+        delta = curr_time - prev_time
+        if delta < timedelta(minutes = 10): # Update the cache every 10 minutes
+            return
+        resource_uri.params["time__gte"] = prev_time.isoformat()
+        resource_uri.params["time__lt"]  = curr_time.isoformat()
         resource_uri.params["limit"] = "100"
         while resource_uri.uri is not None:
             headers = {'user-agent': self.ua}
@@ -932,12 +932,70 @@ class DataTracker:
                 for obj_json in objs:
                     obj = self.pavlova.from_mapping(obj_json, obj_type) # type: T
                     self._cache_obj(obj.resource_uri, obj_json)
-                    yield obj
             else:
-                print("_retrieve_multi failed: {}".format(r.status_code))
+                print("_cache_objs failed: {}".format(r.status_code))
                 print(r.status_code)
-                return None
 
+
+    def _obj_matches_multi(self, obj: Dict[str, str], resource_uri: URI, deref : Dict[str, str] = {}) -> bool:
+        res = True
+        for (k, v) in resource_uri.params.items():
+            if v is not None:
+                if k in deref.keys():
+                    if (obj[k] is not None) and self._obj_is_cached(URI(obj[k])):
+                        url_obj = self._retrieve_from_cache(URI(obj[k]))
+                        if v != url_obj[deref[k]]:
+                            res = False
+                    else:
+                        res = False
+                elif "__contains" in k:
+                    k_base = k[:-10]
+                    if not v in obj[k_base]:
+                        res = False
+                elif "__gte" in k:
+                    k_base = k[:-5]
+                    if obj[k_base] < v:
+                        res = False
+                elif "__lte" in k:
+                    k_base = k[:-5]
+                    if obj[k_base] > v:
+                        res = False
+                else:
+                    if obj[k] != v:
+                        res = False
+        return res
+
+
+    def _retrieve_multi(self, resource_uri: URI, obj_type: Type[T], deref: Dict[str, str] = {}) -> Iterator[T]:
+        if self.cache_dir is not None:
+            prev_time = self._get_multi_time(resource_uri)
+            curr_time = datetime.now()
+            self._cache_objs(deepcopy(resource_uri), obj_type, prev_time, curr_time)
+            self._set_multi_time(resource_uri, curr_time)
+
+            for obj_file in Path(self.cache_dir, resource_uri.uri[1:-1]).glob("*.json"):
+                obj_json = {}
+                with open(obj_file) as cache_file:
+                    obj_json = json.load(cache_file)
+                if self._obj_matches_multi(obj_json, resource_uri, deref):
+                    cached_obj = self.pavlova.from_mapping(obj_json, obj_type) # type: T
+                    yield cached_obj
+        else:
+            resource_uri.params["limit"] = "100"
+            while resource_uri.uri is not None:
+                headers = {'user-agent': self.ua}
+                self._rate_limit()
+                r = self.session.get(self.base_url + resource_uri.uri, params=resource_uri.params, headers=headers, verify=True, stream=False)
+                if r.status_code == 200:
+                    meta = r.json()['meta']
+                    objs = r.json()['objects']
+                    resource_uri  = URI(meta['next'])
+                    for obj_json in objs:
+                        noncached_obj = self.pavlova.from_mapping(obj_json, obj_type) # type: T
+                        yield noncached_obj
+                else:
+                    print("_retrieve_multi failed: {}".format(r.status_code))
+                    print(r.status_code)
 
     # ----------------------------------------------------------------------------------------------------------------------------
     # Datatracker API endpoints returning information about people:
@@ -960,20 +1018,20 @@ class DataTracker:
 
     def person_aliases(self, person: Person) -> Iterator[PersonAlias]:
         url = PersonAliasURI("/api/v1/person/alias/")
-        url.params["person"] = str(person.id)
-        return self._retrieve_multi(url, PersonAlias)
+        url.params["person"] = person.id
+        return self._retrieve_multi(url, PersonAlias, deref = {"person": "id"})
 
 
     def person_history(self, person: Person) -> Iterator[HistoricalPerson]:
         url = PersonURI("/api/v1/person/historicalperson/")
-        url.params["id"] = str(person.id)
-        return self._retrieve_multi(url, HistoricalPerson)
+        url.params["id"] = person.id
+        return self._retrieve_multi(url, HistoricalPerson, deref = {"person": "id"})
 
 
     def person_events(self, person: Person) -> Iterator[PersonEvent]:
         url = PersonEventURI("/api/v1/person/personevent/")
-        url.params["person"] = str(person.id)
-        return self._retrieve_multi(url, PersonEvent)
+        url.params["person"] = person.id
+        return self._retrieve_multi(url, PersonEvent, deref = {"person": "id"})
 
 
     def people(self, name_contains : Optional[str] = None) -> Iterator[Person]:
@@ -1003,8 +1061,8 @@ class DataTracker:
 
     def email_for_person(self, person: Person) -> Iterator[Email]:
         uri = EmailURI("/api/v1/person/email/")
-        uri.params["person"] = str(person.id)
-        return self._retrieve_multi(uri, Email)
+        uri.params["person"] = person.id
+        return self._retrieve_multi(uri, Email, deref = {"person": "id"})
 
 
     def email_history_for_address(self, email_addr: str) -> Iterator[HistoricalEmail]:
@@ -1016,7 +1074,7 @@ class DataTracker:
     def email_history_for_person(self, person: Person) -> Iterator[HistoricalEmail]:
         uri = EmailURI("/api/v1/person/historicalemail/")
         uri.params["person"] = person.id
-        return self._retrieve_multi(uri, HistoricalEmail)
+        return self._retrieve_multi(uri, HistoricalEmail, deref = {"person": "id"})
 
 
     def emails(self, addr_contains : Optional[str] = None) -> Iterator[Email]:
@@ -1051,7 +1109,7 @@ class DataTracker:
             url.params["type"] = doctype.slug
         if group is not None:
             url.params["group"] = group.id
-        return self._retrieve_multi(url, Document)
+        return self._retrieve_multi(url, Document, deref = {"type": "slug", "group": "id"})
 
 
     # Datatracker API endpoints returning information about document aliases:
@@ -1179,7 +1237,8 @@ class DataTracker:
         url = DocumentStateURI("/api/v1/doc/state/")
         if state_type is not None:
             url.params["type"] = state_type.slug
-        return self._retrieve_multi(url, DocumentState)
+        url.params["used"] = True
+        return self._retrieve_multi(url, DocumentState, deref = {"type": "slug"})
 
 
     def document_state_type(self, state_type_uri : DocumentStateTypeURI) -> Optional[DocumentStateType]:
@@ -1232,7 +1291,7 @@ class DataTracker:
         if by is not None:
             url.params["by"]   = by.id
         url.params["type"]     = event_type
-        return self._retrieve_multi(url, DocumentEvent)
+        return self._retrieve_multi(url, DocumentEvent, deref = {"doc": "id", "by": "id"})
 
 
     # Datatracker API endpoints returning information about document authorship:
@@ -1243,19 +1302,19 @@ class DataTracker:
     def document_authors(self, document : Document) -> Iterator[DocumentAuthor]:
         url = DocumentAuthorURI("/api/v1/doc/documentauthor/")
         url.params["document"] = document.id
-        return self._retrieve_multi(url, DocumentAuthor)
+        return self._retrieve_multi(url, DocumentAuthor, deref = {"document": "id"})
 
 
     def documents_authored_by_person(self, person : Person) -> Iterator[DocumentAuthor]:
         url = DocumentAuthorURI("/api/v1/doc/documentauthor/")
         url.params["person"] = person.id
-        return self._retrieve_multi(url, DocumentAuthor)
+        return self._retrieve_multi(url, DocumentAuthor, deref = {"person": "id"})
 
 
     def documents_authored_by_email(self, email : Email) -> Iterator[DocumentAuthor]:
         url = DocumentAuthorURI("/api/v1/doc/documentauthor/")
         url.params["email"] = email.address
-        return self._retrieve_multi(url, DocumentAuthor)
+        return self._retrieve_multi(url, DocumentAuthor, deref = {"email" : "address"})
 
 
     # Datatracker API endpoints returning information about related documents:
@@ -1275,7 +1334,7 @@ class DataTracker:
             url.params["target"] = target.id
         if relationship_type is not None:
             url.params["relationship"] = relationship_type.slug
-        return self._retrieve_multi(url, RelatedDocument)
+        return self._retrieve_multi(url, RelatedDocument, deref = {"source": "id", "target": "id", "relationship": "slug"})
     
     
     def relationship_type(self, relationship_type_uri: RelationshipTypeURI) -> Optional[RelationshipType]:
@@ -1354,7 +1413,7 @@ class DataTracker:
         url = BallotTypeURI("/api/v1/doc/ballottype/")
         if doc_type is not None:
             url.params["doc_type"] = doc_type.slug
-        return self._retrieve_multi(url, BallotType)
+        return self._retrieve_multi(url, BallotType, deref = {"doc_type": "slug"})
 
 
     
@@ -1387,7 +1446,7 @@ class DataTracker:
         if doc is not None:
             url.params["doc"] = doc.id
         url.params["type"] = event_type
-        return self._retrieve_multi(url, BallotDocumentEvent)
+        return self._retrieve_multi(url, BallotDocumentEvent, deref = {"ballot_type": "id", "by": "id", "doc": "id"})
     
 
     # ----------------------------------------------------------------------------------------------------------------------------
@@ -1428,7 +1487,7 @@ class DataTracker:
             url.params["by"] = by.id
         if submission is not None:
             url.params["submission"] = submission.id
-        return self._retrieve_multi(url, SubmissionEvent)
+        return self._retrieve_multi(url, SubmissionEvent, deref = {"by": "id", "submission": "id"})
 
     # ----------------------------------------------------------------------------------------------------------------------------
     # Datatracker API endpoints returning miscellaneous information about documents:
@@ -1498,7 +1557,7 @@ class DataTracker:
             url.params["state"] = state.slug
         if parent is not None:
             url.params["parent"] = parent.id
-        return self._retrieve_multi(url, Group)
+        return self._retrieve_multi(url, Group, deref = {"parent": "id", "state": "slug"})
 
 
     def group_state(self, group_state : str) -> Optional[GroupState]:
@@ -1561,7 +1620,7 @@ class DataTracker:
         """
         url = SessionAssignmentURI("/api/v1/meeting/schedtimesessassignment/")
         url.params["schedule"] = schedule.id
-        return self._retrieve_multi(url, SessionAssignment)
+        return self._retrieve_multi(url, SessionAssignment, deref = {"schedule": "id"})
 
 
     def meeting_schedule(self, schedule_uri : ScheduleURI) -> Optional[Schedule]:
@@ -1593,7 +1652,7 @@ class DataTracker:
         url.params["date__lte"] = end_date
         if meeting_type is not None:
             url.params["type"] = meeting_type.slug
-        return self._retrieve_multi(url, Meeting)
+        return self._retrieve_multi(url, Meeting, deref = {"type": "slug"})
 
 
 
