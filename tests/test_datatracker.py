@@ -50,7 +50,7 @@ class TestDatatracker(unittest.TestCase):
         self.dt = DataTracker(cache_dir=Path("cache"))
 
     def test_email(self) -> None:
-        e  = self.dt.email(EmailURI("/api/v1/person/email/csp@csperkins.org"))
+        e  = self.dt.email(EmailURI("/api/v1/person/email/csp@csperkins.org/"))
         if e is not None:
             self.assertEqual(e.resource_uri, EmailURI("/api/v1/person/email/csp@csperkins.org/"))
             self.assertEqual(e.address,      "csp@csperkins.org")
